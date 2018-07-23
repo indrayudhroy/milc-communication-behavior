@@ -1,3 +1,7 @@
+
+	# Use trace files of all ranks to calculate median computation times to be used for sleeping the program.
+	# Warmups and ignored instructions have to be removed again.
+
 import os
 
 def main():

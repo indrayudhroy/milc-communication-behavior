@@ -41,6 +41,8 @@ def main():
 
 				oldWord = w
 
+
+
 	#print "sum of streaks = " + str(sigma)
 
 

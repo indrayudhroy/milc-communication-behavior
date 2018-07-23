@@ -4,7 +4,7 @@
 #include<time.h>
 
 int NUM_NEIGHBORS = 8;
-int neighbors[] = {1, -1, 6, -6, 36, -36, 360, -360};
+int neighbors[] = {1, -1, 6, -6, 36, -36, 360, -360};	//predefined
 float global_sum = 0.0;
 
 #define COLLECT_COUNTERS 1
@@ -52,14 +52,14 @@ int findPartnerIndex(int value) {
 int main(int argc, char const *argv[])
 {
 	const int DATATYPE_SIZE = 4;
-	const int MAX_STREAK = 16;
+	const int MAX_STREAK = 16;				// Actual streak includes SENDS and RECVs, so it's 32 in total
 	const int MPI_ANY_SOURCE_VALUE = -2;
 	const int TIMESTEPS = 60;
 	const int RANKS_PER_NODE = 30;	
 
 	FILE *fp;
 	float local_sum = -1.234;
-	int ***table;	
+	int ***table;							// Lookup table for finding a partner rank to send to	
 	int i, j, k, blockID, step;
 	int myRank, numRanks;
 	struct timespec time1, time2;
@@ -69,6 +69,8 @@ int main(int argc, char const *argv[])
 	int TOTAL_SENDS_RECVS;
 	int TOTAL_ALLREDUCE;
 	int TOTAL_CHAINS;	
+
+	// Loading metadata
 
 	fp = fopen("metadata_files/length_meta.q","r");
 	fscanf(fp, "%d %d %d %d", &TOTAL_MPI_CALLS, &TOTAL_SENDS_RECVS, &TOTAL_ALLREDUCE, &TOTAL_CHAINS);
@@ -100,6 +102,8 @@ int main(int argc, char const *argv[])
 	fclose(fp);
 	allreduceInstrLocs[i] = -1;
 
+	// "Streaks" and "chains" form an iterative structure. 
+
 	int *chainLenList = malloc(sizeof(int) * TOTAL_CHAINS);
 	fp = fopen("metadata_files/block.dat","r");
 	for (i = 0; i < TOTAL_CHAINS; i++) {
@@ -121,6 +125,14 @@ int main(int argc, char const *argv[])
 	}
 	fclose(fp);
 
+	// The program consists of SENDs, RECVs, WAITs, and ALL_REDUCE in a variable pattern. 
+	// A rank performs MPI calls to communicate with its neighbors and does computation alternatingly.	
+
+	// A streak follows the format: m (RECV, SEND) pairs followed by 2m WAITs. m is at most 16.
+	// Each streak repeats (or possibly occurs once) to form a chain. 
+	// For example, 16 pairs of (RECV, SEND) form a streak. The streak repeats 22 times, which results in a chain of length 22.
+	// Chains of varying length make up the benchmark.
+
 
 	MPI_Init(NULL, NULL);
 	time1.tv_sec = 0; time1.tv_nsec = computationTimes[computation_tracker++]; nanosleep(&time1, &time2);
@@ -130,6 +142,10 @@ int main(int argc, char const *argv[])
 
 	MPI_Barrier(MPI_COMM_WORLD);			
 	time1.tv_sec = 0; time1.tv_nsec = computationTimes[computation_tracker++]; nanosleep(&time1, &time2);
+
+	// Calculate partner ranks for each rank:
+		// Neighbors depend on the problem size. Ranks communicate with their 8 nearest neighbors on that grid, 
+		// with wraparound on the boundaries.
 
 	int myRecvRanks[NUM_NEIGHBORS];
 	for (i = 0; i < NUM_NEIGHBORS; i++) {
@@ -174,7 +190,11 @@ int main(int argc, char const *argv[])
 
 	// printf("Checkpoint 1.\n");
 
-	// Fill table of partner ranks (specifically partners of Rank0)
+	// Fill lookup table of partner ranks (specifically partners of Rank0)
+
+	// z-dimension is chain lengths (each one is a new chain), y-dimension is streak lengths. Table(i,j,k) contains the partner rank 
+	// to send to based on the current chain no., and the streak no. within the chain.
+	// Partner ranks are variable throughout	  
     
 	FILE *fp2 = fopen("metadata_files/partner.q", "r");
 
@@ -241,7 +261,7 @@ int main(int argc, char const *argv[])
 	MPI_Status *sendStatus = malloc(sizeof(MPI_Status) * MAX_STREAK);
 	MPI_Status *recvStatus = malloc(sizeof(MPI_Status) * MAX_STREAK);	
 
-	int sendrecv_tracker, allreduce_tracker, instructionCount;
+	int sendrecv_tracker, allreduce_tracker, instructionCount;	// Keep track of different types of instructions
 	
 	//printf("Checkpoint 2.\n");
 
@@ -261,11 +281,16 @@ int main(int argc, char const *argv[])
 
 		// ** BEGIN
 		// =============================================================
+
+		// Before each RECV/SEND, variables are set for that round, i.e., the partner rank, message size, etc.
+
 		z_dim_count = 0;
+
 
 		for (a = 0; a < TOTAL_CHAINS; a++) {
 			for (b = 0; b < chainLenList[a]; b++) {
 				for (c = 1; c < streakLenList[a]; c=c+2) {
+
 					recvRank = table[z_dim_count+a][b][c];
 					messageSize = msgSizeList[sendrecv_tracker];
 					tag = tagList[sendrecv_tracker];
@@ -275,9 +300,7 @@ int main(int argc, char const *argv[])
 					buf_index = c/2;
 					sendBufs[buf_index] = malloc(messageSize);
 					recvBufs[buf_index] = malloc(messageSize);
-					// bufCount = 25;
-					// sendBufs[buf_index] = malloc(100);
-					// recvBufs[buf_index] = malloc(100);				
+				
 
 					MPI_Irecv(recvBufs[buf_index], bufCount, MPI_INT, MPI_ANY_SOURCE, tag, MPI_COMM_WORLD, &recvReqs[buf_index]);
 					time1.tv_sec = 0; time1.tv_nsec = computationTimes[computation_tracker++]; nanosleep(&time1, &time2);
@@ -288,6 +311,9 @@ int main(int argc, char const *argv[])
 
 					}
 					int streakValue = streakLenList[a] / 2;
+
+					// Post WAITs corresponding to SENDs and RECVs for current streak length
+
 					for (temp = 0; temp < streakValue; temp++) {
 						MPI_Wait(&recvReqs[temp], &recvStatus[temp]);
 						time1.tv_sec = 0; time1.tv_nsec = computationTimes[computation_tracker++]; nanosleep(&time1, &time2);
@@ -297,6 +323,8 @@ int main(int argc, char const *argv[])
 						free(sendBufs[temp]);
 						instructionCount += 2;
 					}
+
+					// ALL_REDUCE calls are variable
 
 					if (allreduceInstrLocs[allreduce_tracker] == instructionCount) {				
 						do {
@@ -308,11 +336,11 @@ int main(int argc, char const *argv[])
 						while (allreduceInstrLocs[allreduce_tracker] == allreduceInstrLocs[allreduce_tracker-1] + 1);
 					}
 
-					//free if needed
-			}	//end of b
-			//free if needed
-		}	//end of a
-		//free if needed
+					
+			}	
+			
+		}	
+		
 
 		MPI_Barrier(MPI_COMM_WORLD);
 		time1.tv_sec = 0; time1.tv_nsec = computationTimes[computation_tracker++]; nanosleep(&time1, &time2);

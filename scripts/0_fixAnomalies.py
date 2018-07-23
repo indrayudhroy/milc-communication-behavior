@@ -43,7 +43,7 @@ def main():
 				deleteFlag = 0
 				if tag in deleteByTag:
 					deleteFlag = 1
-				if partner == 0 and tag == 0:	#hard-coded condition ("0 0")
+				if partner == 0 and tag == 0:	#predefined condition ("0 0")
 					deleteFlag = 1
 				if deleteFlag == 0:
 					file.write(line)
